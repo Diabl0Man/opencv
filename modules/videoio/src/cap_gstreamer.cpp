@@ -279,7 +279,7 @@ public:
     static void newPad(GstElement * /*elem*/, GstPad     *pad, gpointer    data);
 
 protected:
-    bool determineFrameDims(CV_OUT Size& sz, CV_OUT gint& channels, CV_OUT bool& isOutputByteBuffer);
+    bool determineFrameDims(CV_OUT Size& sz, CV_OUT gint& channels, CV_OUT gint& depth, CV_OUT bool& isOutputByteBuffer);
     bool isPipelinePlaying();
     void startPipeline();
     void stopPipeline();
@@ -351,8 +351,9 @@ bool GStreamerCapture::retrieveFrame(int, OutputArray dst)
         return false;
     Size sz;
     gint channels = 0;
+    gint depth = CV_8U;
     bool isOutputByteBuffer = false;
-    if (!determineFrameDims(sz, channels, isOutputByteBuffer))
+    if (!determineFrameDims(sz, channels, depth, isOutputByteBuffer))
         return false;
 
     // gstreamer expects us to handle the memory at this point
@@ -374,7 +375,7 @@ bool GStreamerCapture::retrieveFrame(int, OutputArray dst)
         if (isOutputByteBuffer)
             src = Mat(Size(info.size, 1), CV_8UC1, info.data);
         else
-            src = Mat(sz, CV_MAKETYPE(CV_8U, channels), info.data);
+            src = Mat(sz, CV_MAKETYPE(depth, channels), info.data);
         CV_Assert(src.isContinuous());
         src.copyTo(dst);
     }
@@ -388,7 +389,7 @@ bool GStreamerCapture::retrieveFrame(int, OutputArray dst)
     return true;
 }
 
-bool GStreamerCapture::determineFrameDims(Size &sz, gint& channels, bool& isOutputByteBuffer)
+bool GStreamerCapture::determineFrameDims(Size &sz, gint& channels, gint& depth, bool& isOutputByteBuffer)
 {
     GstCaps * frame_caps = gst_sample_get_caps(sample);  // no lifetime transfer
 
@@ -414,17 +415,18 @@ bool GStreamerCapture::determineFrameDims(Size &sz, gint& channels, bool& isOutp
     std::string name = toLowerCase(std::string(name_));
 
     // we support 11 types of data:
-    //     video/x-raw, format=BGR   -> 8bit, 3 channels
-    //     video/x-raw, format=GRAY8 -> 8bit, 1 channel
-    //     video/x-raw, format=UYVY  -> 8bit, 2 channel
-    //     video/x-raw, format=YUY2  -> 8bit, 2 channel
-    //     video/x-raw, format=YVYU  -> 8bit, 2 channel
-    //     video/x-raw, format=NV12  -> 8bit, 1 channel (height is 1.5x larger than true height)
-    //     video/x-raw, format=NV21  -> 8bit, 1 channel (height is 1.5x larger than true height)
-    //     video/x-raw, format=YV12  -> 8bit, 1 channel (height is 1.5x larger than true height)
-    //     video/x-raw, format=I420  -> 8bit, 1 channel (height is 1.5x larger than true height)
-    //     video/x-bayer             -> 8bit, 1 channel
-    //     image/jpeg                -> 8bit, mjpeg: buffer_size x 1 x 1
+    //     video/x-raw, format=BGR       -> 8bit, 3 channels
+    //     video/x-raw, format=GRAY8     -> 8bit, 1 channel
+    //     video/x-raw, format=GRAY16_LE -> 16bit, 1 channel
+    //     video/x-raw, format=UYVY      -> 8bit, 2 channel
+    //     video/x-raw, format=YUY2      -> 8bit, 2 channel
+    //     video/x-raw, format=YVYU      -> 8bit, 2 channel
+    //     video/x-raw, format=NV12      -> 8bit, 1 channel (height is 1.5x larger than true height)
+    //     video/x-raw, format=NV21      -> 8bit, 1 channel (height is 1.5x larger than true height)
+    //     video/x-raw, format=YV12      -> 8bit, 1 channel (height is 1.5x larger than true height)
+    //     video/x-raw, format=I420      -> 8bit, 1 channel (height is 1.5x larger than true height)
+    //     video/x-bayer                 -> 8bit, 1 channel
+    //     image/jpeg                    -> 8bit, mjpeg: buffer_size x 1 x 1
     // bayer data is never decoded, the user is responsible for that
     // everything is 8 bit, so we just test the caps for bit depth
     if (name == "video/x-raw")
@@ -437,19 +439,28 @@ bool GStreamerCapture::determineFrameDims(Size &sz, gint& channels, bool& isOutp
         if (format == "BGR")
         {
             channels = 3;
+            depth = CV_8U;
         }
         else if (format == "UYVY" || format == "YUY2" || format == "YVYU")
         {
             channels = 2;
+            depth = CV_8U;
         }
         else if (format == "NV12" || format == "NV21" || format == "YV12" || format == "I420")
         {
             channels = 1;
             sz.height = sz.height * 3 / 2;
+            depth = CV_8U;
         }
         else if (format == "GRAY8")
         {
             channels = 1;
+            depth = CV_8U;
+        }
+        else if (format == "GRAY16_LE")
+        {
+            channels = 1;
+            depth = CV_16U;
         }
         else
         {
@@ -851,7 +862,7 @@ bool GStreamerCapture::open(const String &filename_)
     gst_app_sink_set_emit_signals (GST_APP_SINK(sink.get()), FALSE);
 
 
-    caps.attach(gst_caps_from_string("video/x-raw, format=(string){BGR, GRAY8}; video/x-bayer,format=(string){rggb,bggr,grbg,gbrg}; image/jpeg"));
+    caps.attach(gst_caps_from_string("video/x-raw, format=(string){BGR, GRAY8, GRAY16_LE}; video/x-bayer,format=(string){rggb,bggr,grbg,gbrg}; image/jpeg"));
 
     if (manualpipeline)
     {
